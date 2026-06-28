@@ -1,6 +1,9 @@
 package com.example.examplemod;
 
 import java.util.Optional;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.List;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -14,8 +17,22 @@ public final class AkinaMountainBuilder {
     private static final int BASE_RADIUS = 80;
     private static final int MOUNTAIN_HEIGHT = 55;
     private static final int ROAD_WIDTH = 10;
-    private static final int MAX_ROAD_LENGTH = 1_500;
     private static final String ROAD_BLOCK_ID = "creatediselgenerators:asphalt_block";
+    private static final List<RoutePoint> DOWNHILL_ROUTE = List.of(
+            new RoutePoint(0, 4, 46),      // Summit start
+            new RoutePoint(18, 10, 43),    // Wide right
+            new RoutePoint(8, 20, 40),     // Long left
+            new RoutePoint(24, 30, 36),    // S-curve entry
+            new RoutePoint(6, 38, 33),     // S-curve exit
+            new RoutePoint(-24, 44, 29),   // Hairpin 1
+            new RoutePoint(28, 50, 26),    // Hairpin 2
+            new RoutePoint(-30, 56, 22),   // Hairpin 3
+            new RoutePoint(30, 62, 18),    // Hairpin 4
+            new RoutePoint(-28, 68, 14),   // Hairpin 5
+            new RoutePoint(-10, 72, 10),   // Medium sweeper
+            new RoutePoint(14, 74, 7),     // Final bend
+            new RoutePoint(2, 76, 5)       // Base finish
+    );
 
     private AkinaMountainBuilder() {
     }
@@ -55,32 +72,52 @@ public final class AkinaMountainBuilder {
 
     private static int buildRoad(ServerLevel level, BlockPos center, BlockState roadBlock, BlockState fillerBlock) {
         int halfWidth = ROAD_WIDTH / 2;
-        for (int step = 0; step < MAX_ROAD_LENGTH; step++) {
-            double progress = step / (double) (MAX_ROAD_LENGTH - 1);
-            double angle = progress * Math.PI * 2.0 * 4.0;
-            double radius = 68.0 - (progress * 43.0);
-            int roadY = center.getY() + 4 + (int) Math.round(progress * 45.0);
-            int roadX = center.getX() + (int) Math.round(Math.cos(angle) * radius);
-            int roadZ = center.getZ() + (int) Math.round(Math.sin(angle) * radius);
+        Set<Long> paintedRoadCenters = new HashSet<>();
 
-            double tangentX = -Math.sin(angle);
-            double tangentZ = Math.cos(angle);
-            double tangentLength = Math.sqrt((tangentX * tangentX) + (tangentZ * tangentZ));
-            double perpendicularX = tangentZ / tangentLength;
-            double perpendicularZ = -tangentX / tangentLength;
+        for (int index = 0; index < DOWNHILL_ROUTE.size() - 1; index++) {
+            RoutePoint from = DOWNHILL_ROUTE.get(index);
+            RoutePoint to = DOWNHILL_ROUTE.get(index + 1);
+            int deltaX = to.x - from.x;
+            int deltaZ = to.z - from.z;
+            int steps = Math.max(1, Math.max(Math.abs(deltaX), Math.abs(deltaZ)) * 3);
 
-            for (int laneOffset = -halfWidth; laneOffset < halfWidth; laneOffset++) {
-                int laneX = roadX + (int) Math.round(perpendicularX * laneOffset);
-                int laneZ = roadZ + (int) Math.round(perpendicularZ * laneOffset);
-                BlockPos roadPos = new BlockPos(laneX, roadY, laneZ);
-                level.setBlockAndUpdate(roadPos, roadBlock);
-                level.setBlockAndUpdate(roadPos.above(), Blocks.AIR.defaultBlockState());
-                level.setBlockAndUpdate(roadPos.above(2), Blocks.AIR.defaultBlockState());
-                level.setBlockAndUpdate(roadPos.below(), fillerBlock);
-                level.setBlockAndUpdate(roadPos.below(2), fillerBlock);
+            for (int step = 0; step <= steps; step++) {
+                double progress = step / (double) steps;
+                int roadX = center.getX() + (int) Math.round(lerp(from.x, to.x, progress));
+                int roadZ = center.getZ() + (int) Math.round(lerp(from.z, to.z, progress));
+                int roadY = center.getY() + (int) Math.round(lerp(from.yOffset, to.yOffset, progress));
+
+                paintRoadSlice(level, roadBlock, fillerBlock, halfWidth, roadX, roadY, roadZ, deltaX, deltaZ);
+                paintedRoadCenters.add(BlockPos.asLong(roadX, roadY, roadZ));
             }
         }
-        return MAX_ROAD_LENGTH;
+
+        return paintedRoadCenters.size();
+    }
+
+    private static void paintRoadSlice(ServerLevel level, BlockState roadBlock, BlockState fillerBlock, int halfWidth, int roadX, int roadY, int roadZ, double tangentX, double tangentZ) {
+        double tangentLength = Math.sqrt((tangentX * tangentX) + (tangentZ * tangentZ));
+        if (tangentLength < 1.0E-4) {
+            return;
+        }
+
+        double perpendicularX = tangentZ / tangentLength;
+        double perpendicularZ = -tangentX / tangentLength;
+
+        for (int laneOffset = -halfWidth; laneOffset < halfWidth; laneOffset++) {
+            int laneX = roadX + (int) Math.round(perpendicularX * laneOffset);
+            int laneZ = roadZ + (int) Math.round(perpendicularZ * laneOffset);
+            BlockPos roadPos = new BlockPos(laneX, roadY, laneZ);
+            level.setBlockAndUpdate(roadPos, roadBlock);
+            level.setBlockAndUpdate(roadPos.above(), Blocks.AIR.defaultBlockState());
+            level.setBlockAndUpdate(roadPos.above(2), Blocks.AIR.defaultBlockState());
+            level.setBlockAndUpdate(roadPos.below(), fillerBlock);
+            level.setBlockAndUpdate(roadPos.below(2), fillerBlock);
+        }
+    }
+
+    private static double lerp(int start, int end, double progress) {
+        return start + ((end - start) * progress);
     }
 
     private static BlockState resolveRoadBlock() {
@@ -92,5 +129,8 @@ public final class AkinaMountainBuilder {
 
         ExampleMod.LOGGER.warn("Block {} not found, using minecraft:black_concrete as road fallback", ROAD_BLOCK_ID);
         return Blocks.BLACK_CONCRETE.defaultBlockState();
+    }
+
+    private record RoutePoint(int x, int z, int yOffset) {
     }
 }
